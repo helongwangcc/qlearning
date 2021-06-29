@@ -1,0 +1,9 @@
+# ignore notebook file
+.ipynb_checkpoints
+# vs code configuration file
+.vscode
+# build cache
+build/
+# dependency egg file
+routelib.egg-info/
+__pycache__

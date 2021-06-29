@@ -1,9 +1,14 @@
 from functools import partial
 import networkx as nx
 from shapely.geometry import Point, MultiPoint
-from copy import deepcopy
 import numpy as np
 import matplotlib.pyplot as plt
+from copy import deepcopy
+from fieldosophy.GRF import FEM
+from fieldosophy.GRF import GRF
+from fieldosophy import mesh as mesher
+from scipy import stats
+
 
 
 class RectangleGraph:
@@ -13,6 +18,7 @@ class RectangleGraph:
         self.__vertices = self.__createVertices(numOfRow, numOfColumn)
         self.__edges = self.__createEdges()
         self.__graph = self.__createGraph()
+        self.SPDMatrix,self.matrixShape = self.weightSPD(3000)
 
     def addObstacle(self, graph, lowerLeft, upperRight):
         assert lowerLeft[0] < upperRight[0], "Lower left row x > upper right row x."
@@ -36,22 +42,61 @@ class RectangleGraph:
         newPoly = MultiPoint(obstacle).convex_hull
         return newPoly.exterior.coords.xy
     
-    def createWeightFunction(self, source, u, v, e):
+    def weightSPD(self, numOfSample):
         numOfRow, numOfColumn = self.__graphDimension
-        dimension = np.sqrt(numOfRow ** 2 + numOfColumn ** 2)
-        distance = (
-            np.sqrt((source[0] - u[0]) ** 2 + (source[1] - u[1]) ** 2) + 
-            np.sqrt((source[0] - v[0]) ** 2 + (source[1] - v[1]) ** 2)
-        ) / 2
-        
-        if e['weight'] == 1 :
-            return np.random.normal(10.0, 2 * distance / dimension)
+        limitOfCoordinate = np.asarray(
+            [
+                [0, numOfRow],
+                [0, numOfColumn]
+            ]
+        )
+        minCorelation = (numOfColumn + numOfRow) * 0.2
+        extension = minCorelation * 1.5 
+        meshPlane = mesher.regularMesh.meshInPlaneRegular( 
+            limitOfCoordinate + \
+            extension * np.array([-1,1]).reshape((1,2)), 
+            minCorelation /5/np.sqrt(2) 
+        )
+        r = minCorelation * 1.2
+        nu = 1.3
+        sigma = 1
+        sigmaEps = 2e-2
+        BCRobin = np.ones( (meshPlane.getBoundary()["edges"].shape[0], 2) )
+        BCRobin[:, 0] = 0  # Association with constant
+        BCRobin[:, 1] = - 1 # Association with function
+        fem = FEM.MaternFEM(
+            mesh = meshPlane,
+            childParams = {'r':r},
+            nu = nu,
+            sigma = sigma, 
+            BCDirichlet = None, 
+            BCRobin = BCRobin 
+        )
+        Z = fem.generateRandom(numOfSample)
+        graphRow = np.arange(numOfRow)
+        graphCol = np.arange(numOfColumn)
+        obsPoints = np.meshgrid(graphCol, graphRow)
+        obsMat = fem.mesh.getObsMat(
+            np.hstack( 
+                (obsPoints[0].reshape(-1,1),
+                 obsPoints[1].reshape(-1,1)) 
+                )
+        )
+        ZObs = obsMat.tocsr() * Z + \
+            stats.norm.rvs( loc = 0, scale = sigmaEps, size = numOfSample * obsMat.shape[0] ).reshape((obsMat.shape[0], numOfSample))
+        return ZObs, obsPoints[0].shape
+    
+    def createWeightFunction(self, map, u, v, e):
+        # this is used for creating weight function for Dijkstra's algorithm
+        if e['weight'] == np.inf :
+            return np.inf
         else:
-            return e['weight']
+            return map[u] ** 2 + map[v] ** 2
 
     
-    def findShortestRoute(self, graph, source, target):
-        weight = partial(self.createWeightFunction, source)
+    def findShortestRoute(self, graph, source, target, map):
+        # weight is a function of node, node and edge dict
+        weight = partial(self.createWeightFunction, map)
         return nx.shortest_path(graph, source, target, weight)       
 
     
@@ -94,7 +139,7 @@ class RectangleGraph:
     def __createGraph(self):
         g = nx.Graph()
         for edge in self.__edges:
-            g.add_edge(edge[0], edge[1], weight=10.)
+            g.add_edge(edge[0], edge[1], weight=1.)
         return g
 
     def __createVertices(self, numOfRow, numOfColumn):
@@ -127,30 +172,25 @@ class RectangleGraph:
     def graphDimension(self):
         return self.__graphDimension
     
-    
-    
-
-
 
 if __name__ == "__main__":
 
+    from copy import deepcopy
+
     rgInstance = RectangleGraph(40, 40)
-    graph = deepcopy(rgInstance.graph)
-    obstacles = []
-    obstacles.append(rgInstance.addObstacle(graph, (5,5), (10, 10)))    
-    obstacles.append(rgInstance.addObstacle(graph, (10,10), (15, 15)))
-    obstacles.append(rgInstance.addObstacle(graph, (15,15), (20, 20)))
-    obstacles.append(rgInstance.addObstacle(graph, (20,20), (35, 35)))
-    print (rgInstance.findShortestRoute(graph, (1,0), (39,39)))
-
-
-
-
-    # rgInstance.drawGraph(graph, obstacles)
-
-                
     
+    # # copy graph in the instance
+    # graph = deepcopy(rgInstance.graph)
 
-            
-
-
+    # # add obstacles
+    # obstacles = []
+    # obstacles.append(rgInstance.addObstacle(graph, (5,5), (10, 10)))    
+    # obstacles.append(rgInstance.addObstacle(graph, (10,10), (15, 15)))
+    # obstacles.append(rgInstance.addObstacle(graph, (15,15), (20, 20)))
+    # obstacles.append(rgInstance.addObstacle(graph, (20,20), (35, 35)))
+    
+    # # draw graph and obstacle
+    # rgInstance.drawGraph(graph, obstacles)
+    
+    # # print shortest route
+    # print (rgInstance.findShortestRoute(graph, (1,0), (39,39)))
